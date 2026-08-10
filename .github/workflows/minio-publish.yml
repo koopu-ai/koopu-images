@@ -1,0 +1,106 @@
+name: minio-publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_existing_digest:
+        description: Optional digest for an already-published immutable tag
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-reviewed-main:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      LOCAL_IMAGE: koopu/minio:RELEASE.2025-10-15T17-29-55Z-b1
+      PUBLISH_IMAGE: ghcr.io/koopu-ai/minio:RELEASE.2025-10-15T17-29-55Z-b1
+      EXPECTED_EXISTING_DIGEST: ${{ inputs.expected_existing_digest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+      - id: buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          use: false
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse overwrite or resolve existing digest
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -z "$EXPECTED_EXISTING_DIGEST" || "$EXPECTED_EXISTING_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          set +e
+          output="$(docker buildx imagetools inspect "$PUBLISH_IMAGE" 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [[ "$status" == 0 ]]; then
+            remote="$(awk '$1 == "Digest:" {print $2; exit}' <<< "$output")"
+            [[ -n "$EXPECTED_EXISTING_DIGEST" && "$remote" == "$EXPECTED_EXISTING_DIGEST" ]] \
+              || { printf 'immutable tag exists with unconfirmed digest\n' >&2; exit 1; }
+            printf 'publish=false\n' >> "$GITHUB_OUTPUT"
+          else
+            [[ "$output" == *"not found"* || "$output" == *"manifest unknown"* ]] \
+              || { printf 'registry lookup was inconclusive\n' >&2; exit 1; }
+            [[ -z "$EXPECTED_EXISTING_DIGEST" ]] || exit 1
+            printf 'publish=true\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and verify reviewed payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          for platform in linux/amd64 linux/arm64; do
+            architecture="${platform#linux/}"
+            TARGET_PLATFORM="$platform" \
+              BUILDER_NAME="${{ steps.buildx.outputs.name }}" \
+              NO_CACHE=1 images/minio/build.sh
+            TARGET_PLATFORM="$platform" images/minio/health-check.sh "$LOCAL_IMAGE"
+            TARGET_PLATFORM="$platform" images/minio/artifact-fingerprint.sh "$LOCAL_IMAGE" \
+              > "$RUNNER_TEMP/minio-fingerprint-${architecture}"
+            docker image rm --force "$LOCAL_IMAGE"
+          done
+      - name: Publish the dual-platform index once
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        run: |
+          BUILD_MODE=push \
+            TARGET_PLATFORMS=linux/amd64,linux/arm64 \
+            IMAGE_TAG="$PUBLISH_IMAGE" \
+            BUILDER_NAME="${{ steps.buildx.outputs.name }}" \
+            images/minio/build.sh
+      - name: Attest registry payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(docker buildx imagetools inspect "$PUBLISH_IMAGE")"
+          digest="$(awk '$1 == "Digest:" {print $2; exit}' <<< "$output")"
+          remote="${PUBLISH_IMAGE%:*}@${digest}"
+          [[ "$remote" =~ ^ghcr\.io/koopu-ai/minio@sha256:[0-9a-f]{64}$ ]]
+          raw="$(docker buildx imagetools inspect --raw "$remote")"
+          platforms="$(jq -r '[.manifests[]?.platform | select(.os == "linux" and (.architecture == "amd64" or .architecture == "arm64")) | (.os + "/" + .architecture)] | unique | sort | join(",")' <<< "$raw")"
+          [[ "$platforms" == "linux/amd64,linux/arm64" ]]
+          for platform in linux/amd64 linux/arm64; do
+            architecture="${platform#linux/}"
+            docker pull --platform "$platform" "$remote"
+            [[ "$(docker image inspect "$remote" --format '{{.Architecture}}')" == "$architecture" ]]
+            actual="$(TARGET_PLATFORM="$platform" images/minio/artifact-fingerprint.sh "$remote")"
+            expected="$(cat "$RUNNER_TEMP/minio-fingerprint-${architecture}")"
+            [[ "$actual" == "$expected" ]]
+            docker image rm --force "$remote"
+          done
+          printf 'published_ref=%s\nplatforms=%s\n' "$remote" "$platforms"
+          printf '### Published MinIO image\n\n`%s`\n' "$remote" >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        run: docker image rm --force "$LOCAL_IMAGE" "$PUBLISH_IMAGE" || true
