@@ -3,18 +3,18 @@ name: image-ci
 on:
   pull_request:
     paths:
-      - .github/workflows/image-ci.yml
-      - .github/workflows/postgres-publish.yml
-      - .github/workflows/pgbouncer-publish.yml
-      - .github/workflows/minio-publish.yml
+      - .forgejo/workflows/image-ci.yml
+      - .forgejo/workflows/postgres-publish.yml
+      - .forgejo/workflows/pgbouncer-publish.yml
+      - .forgejo/workflows/minio-publish.yml
       - images/**
   push:
     branches: [main]
     paths:
-      - .github/workflows/image-ci.yml
-      - .github/workflows/postgres-publish.yml
-      - .github/workflows/pgbouncer-publish.yml
-      - .github/workflows/minio-publish.yml
+      - .forgejo/workflows/image-ci.yml
+      - .forgejo/workflows/postgres-publish.yml
+      - .forgejo/workflows/pgbouncer-publish.yml
+      - .forgejo/workflows/minio-publish.yml
       - images/**
 
 permissions:
