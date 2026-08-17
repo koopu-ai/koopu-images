@@ -1,0 +1,138 @@
+name: image-ci
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/image-ci.yml
+      - .github/workflows/postgres-publish.yml
+      - .github/workflows/pgbouncer-publish.yml
+      - .github/workflows/minio-publish.yml
+      - images/**
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/image-ci.yml
+      - .github/workflows/postgres-publish.yml
+      - .github/workflows/pgbouncer-publish.yml
+      - .github/workflows/minio-publish.yml
+      - images/**
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    runs-on: koopu-images-ci
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        image: [postgres, pgbouncer, minio]
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Install ARM64 emulation
+        if: matrix.platform == 'linux/arm64'
+        uses: https://code.forgejo.org/docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+      - name: Install an isolated Buildx builder
+        id: buildx
+        uses: https://code.forgejo.org/docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          use: false
+      - name: Build twice and compare reviewed payload
+        shell: bash
+        env:
+          IMAGE_KIND: ${{ matrix.image }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+          NO_CACHE: "1"
+        run: |
+          set -euo pipefail
+          case "$IMAGE_KIND" in
+            postgres)
+              image="koopu/postgres:pg18-ts2.29.0-pgv0.8.5-b2"
+              ;;
+            pgbouncer)
+              image="koopu/pgbouncer:1.25.2-alpine3.23-b1"
+              ;;
+            minio)
+              image="koopu/minio:RELEASE.2025-10-15T17-29-55Z-b1"
+              ;;
+            *)
+              printf 'unsupported image kind: %s\n' "$IMAGE_KIND" >&2
+              exit 2
+              ;;
+          esac
+          cleanup() { docker image rm --force "$image" || true; }
+          trap cleanup EXIT
+
+          for pass in 1 2; do
+            "images/${IMAGE_KIND}/build.sh"
+            "images/${IMAGE_KIND}/health-check.sh" "$image"
+            "images/${IMAGE_KIND}/artifact-fingerprint.sh" "$image" \
+              > "$RUNNER_TEMP/${IMAGE_KIND}-fingerprint-${pass}"
+            [[ "$pass" == 2 ]] || docker image rm --force "$image"
+          done
+          diff --unified \
+            "$RUNNER_TEMP/${IMAGE_KIND}-fingerprint-1" \
+            "$RUNNER_TEMP/${IMAGE_KIND}-fingerprint-2"
+      - name: Exercise negative controls
+        if: matrix.platform == 'linux/amd64'
+        shell: bash
+        env:
+          IMAGE_KIND: ${{ matrix.image }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+        run: |
+          set -euo pipefail
+          case "$IMAGE_KIND" in
+            postgres)
+              unsafe="koopu/postgres:pg18-ts2.29.0-pgv0.8.1-b0"
+              trap 'docker image rm --force "$unsafe" || true' EXIT
+              ALLOW_UNSAFE_TEST_VERSION=1 \
+              PGVECTOR_VERSION_OVERRIDE=0.8.1 \
+              PGVECTOR_COMMIT_OVERRIDE=778dacf20c07caf904557a88705142631818d8cb \
+              PGVECTOR_SOURCE_SHA256_OVERRIDE=4c33cf053329784ba6d992d05c9588b93789e907a7511f20ff5a5a5b8a0703c1 \
+              BUILD_REVISION_OVERRIDE=0 \
+              IMAGE_TAG="$unsafe" \
+                images/postgres/build.sh
+              if images/postgres/health-check.sh "$unsafe"; then
+                printf 'vulnerable pgvector unexpectedly passed\n' >&2
+                exit 1
+              fi
+              ;;
+            pgbouncer)
+              image="koopu/pgbouncer:1.25.2-alpine3.23-b1"
+              images/pgbouncer/build.sh
+              if ALLOW_UNREADABLE_CONFIG_TEST=1 \
+                images/pgbouncer/health-check.sh "$image"; then
+                printf 'unreadable runtime configuration unexpectedly passed\n' >&2
+                exit 1
+              fi
+              invalid="koopu/pgbouncer:1.25.2-alpine3.23-b0"
+              trap 'docker image rm --force "$image" "$invalid" || true' EXIT
+              if ALLOW_INVALID_SOURCE_TEST=1 \
+                PGBOUNCER_SOURCE_SHA256_OVERRIDE="$(printf '0%.0s' {1..64})" \
+                BUILD_REVISION_OVERRIDE=0 \
+                IMAGE_TAG="$invalid" \
+                images/pgbouncer/build.sh; then
+                printf 'false PgBouncer source digest unexpectedly passed\n' >&2
+                exit 1
+              fi
+              ;;
+            minio)
+              invalid="koopu/minio:invalid-source"
+              trap 'docker image rm --force "$invalid" || true' EXIT
+              if ALLOW_INVALID_SOURCE_TEST=1 \
+                MINIO_SOURCE_SHA256_OVERRIDE="$(printf '0%.0s' {1..64})" \
+                IMAGE_TAG="$invalid" \
+                images/minio/build.sh; then
+                printf 'false MinIO source digest unexpectedly passed\n' >&2
+                exit 1
+              fi
+              ;;
+          esac
+          printf 'negative_control=pass image=%s\n' "$IMAGE_KIND"
