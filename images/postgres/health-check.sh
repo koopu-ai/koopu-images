@@ -32,24 +32,30 @@ label() {
 }
 
 pg_major="$(label com.koopu.postgres.major)"
+pg_version="$(label com.koopu.postgres.version)"
 ts_version="$(label com.koopu.timescaledb.version)"
 vector_version="$(label com.koopu.pgvector.version)"
 build_revision="$(label com.koopu.image.build-revision)"
 base_image="$(label com.koopu.postgres.base)"
+timescaledb_tools_image="$(label com.koopu.timescaledb.tools-base)"
 
-for value in "$pg_major" "$ts_version" "$vector_version" "$build_revision"; do
+for value in "$pg_major" "$pg_version" "$ts_version" "$vector_version" "$build_revision"; do
   if [[ ! "$value" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]; then
     printf 'missing or invalid image version label: %s\n' "$value" >&2
     exit 2
   fi
 done
-expected_tag="koopu/postgres:pg${pg_major}-ts${ts_version}-pgv${vector_version}-b${build_revision}"
+expected_tag="koopu/postgres:pg${pg_version}-ts${ts_version}-pgv${vector_version}-b${build_revision}"
 if [[ "$image" != "$expected_tag" ]]; then
   printf 'image tag is not self-describing: expected %s, got %s\n' "$expected_tag" "$image" >&2
   exit 2
 fi
 if [[ ! "$base_image" =~ @sha256:[0-9a-f]{64}$ ]]; then
   printf 'base image label is not digest-pinned: %s\n' "$base_image" >&2
+  exit 2
+fi
+if [[ ! "$timescaledb_tools_image" =~ ^timescale/timescaledb:[^@]+@sha256:[0-9a-f]{64}$ ]]; then
+  printf 'TimescaleDB tools image label is not digest-pinned: %s\n' "$timescaledb_tools_image" >&2
   exit 2
 fi
 
@@ -75,21 +81,26 @@ if [[ "$ready" != "1" ]]; then
 fi
 docker exec "$container" grep -x postgres /proc/1/comm
 docker exec "$container" pg_isready --username postgres --dbname postgres
+docker exec "$container" timescaledb-tune --version
+docker exec "$container" timescaledb-parallel-copy --version
 
 docker exec --interactive "$container" psql \
   --no-psqlrc \
   --username postgres \
   --dbname postgres \
   --set ON_ERROR_STOP=on \
-  --set expected_pg="$pg_major" \
+  --set expected_pg_major="$pg_major" \
+  --set expected_pg_version="$pg_version" \
   --set expected_ts="$ts_version" \
   --set expected_vector="$vector_version" <<'SQL'
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
-SELECT 1 / (split_part(current_setting('server_version'), '.', 1) = :'expected_pg')::int
+SELECT 1 / (split_part(current_setting('server_version'), '.', 1) = :'expected_pg_major')::int
   AS require_expected_postgres_major;
+SELECT 1 / (current_setting('server_version') = :'expected_pg_version')::int
+  AS require_expected_postgres_version;
 SELECT 1 / (extversion = :'expected_vector')::int AS require_expected_vector
   FROM pg_extension WHERE extname = 'vector';
 SELECT 1 / (string_to_array(extversion, '.')::int[] >= ARRAY[0,8,2])::int

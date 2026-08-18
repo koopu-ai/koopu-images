@@ -18,7 +18,7 @@ credentials, and deployment secrets stay in the private operations repository.
 
 | Image | Reviewed tag | Contents |
 |---|---|---|
-| `ghcr.io/koopu-ai/postgres` | `pg18-ts2.29.0-pgv0.8.5-b2` | PostgreSQL 18, TimescaleDB 2.29.0, pgvector 0.8.5 |
+| `ghcr.io/koopu-ai/postgres` | `pg18.6-ts2.29.1-pgv0.8.6-b4` | PostgreSQL 18.6, TimescaleDB 2.29.1, pgvector 0.8.6 |
 | `ghcr.io/koopu-ai/pgbouncer` | `1.25.2-alpine3.23-b1` | PgBouncer 1.25.2 on Alpine 3.23 |
 | `ghcr.io/koopu-ai/minio` | `RELEASE.2025-10-15T17-29-55Z-b1` | MinIO built from the verified upstream source commit |
 
@@ -48,9 +48,9 @@ Each image directory exposes the same interface:
 ```bash
 TARGET_PLATFORM=linux/amd64 images/postgres/build.sh
 TARGET_PLATFORM=linux/amd64 images/postgres/health-check.sh \
-  koopu/postgres:pg18-ts2.29.0-pgv0.8.5-b2
+  koopu/postgres:pg18.6-ts2.29.1-pgv0.8.6-b4
 TARGET_PLATFORM=linux/amd64 images/postgres/artifact-fingerprint.sh \
-  koopu/postgres:pg18-ts2.29.0-pgv0.8.5-b2
+  koopu/postgres:pg18.6-ts2.29.1-pgv0.8.6-b4
 ```
 
 Use `linux/arm64` after installing QEMU binfmt support, or run the commands on a

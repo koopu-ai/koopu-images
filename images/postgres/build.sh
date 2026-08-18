@@ -10,28 +10,46 @@ read_arg() {
 }
 
 base_image="$(read_arg BASE_IMAGE)"
+default_timescaledb_tools_image="$(read_arg TIMESCALEDB_TOOLS_IMAGE)"
+default_timescaledb="$(read_arg TIMESCALEDB_VERSION)"
+default_timescaledb_commit="$(read_arg TIMESCALEDB_COMMIT)"
+default_timescaledb_source_sha="$(read_arg TIMESCALEDB_SOURCE_SHA256)"
 default_vector="$(read_arg PGVECTOR_VERSION)"
 default_commit="$(read_arg PGVECTOR_COMMIT)"
 default_source_sha="$(read_arg PGVECTOR_SOURCE_SHA256)"
 default_build="$(read_arg BUILD_REVISION)"
 
+timescaledb_version="${TIMESCALEDB_VERSION_OVERRIDE:-$default_timescaledb}"
+timescaledb_tools_image="${TIMESCALEDB_TOOLS_IMAGE_OVERRIDE:-$default_timescaledb_tools_image}"
+timescaledb_commit="${TIMESCALEDB_COMMIT_OVERRIDE:-$default_timescaledb_commit}"
+timescaledb_source_sha="${TIMESCALEDB_SOURCE_SHA256_OVERRIDE:-$default_timescaledb_source_sha}"
 vector_version="${PGVECTOR_VERSION_OVERRIDE:-$default_vector}"
 vector_commit="${PGVECTOR_COMMIT_OVERRIDE:-$default_commit}"
 vector_source_sha="${PGVECTOR_SOURCE_SHA256_OVERRIDE:-$default_source_sha}"
 build_revision="${BUILD_REVISION_OVERRIDE:-$default_build}"
-image_tag="${IMAGE_TAG:-koopu/postgres:pg18-ts2.29.0-pgv${vector_version}-b${build_revision}}"
+postgres_version="$(sed -n 's/^ARG BASE_IMAGE=postgres:\([0-9][0-9.]*\)-.*/\1/p' "$dockerfile")"
+image_tag="${IMAGE_TAG:-koopu/postgres:pg${postgres_version}-ts${timescaledb_version}-pgv${vector_version}-b${build_revision}}"
 build_mode="${BUILD_MODE:-load}"
 target_platforms="${TARGET_PLATFORMS:-${TARGET_PLATFORM:-}}"
 
-if [[ ! "$base_image" =~ ^timescale/timescaledb:[^@]+@sha256:[0-9a-f]{64}$ ]]; then
+if [[ ! "$base_image" =~ ^postgres:[0-9]+\.[0-9]+-alpine[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]]; then
   printf 'base image must contain both an audited tag and sha256 digest: %s\n' "$base_image" >&2
   exit 2
 fi
-if [[ ! "$vector_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+if [[ ! "$timescaledb_tools_image" =~ ^timescale/timescaledb:[^@]+@sha256:[0-9a-f]{64}$ ]]; then
+  printf 'TimescaleDB tools image must contain both an audited tag and sha256 digest: %s\n' \
+    "$timescaledb_tools_image" >&2
+  exit 2
+fi
+if [[ ! "$postgres_version" =~ ^18\.[0-9]+$ ]] \
+  || [[ ! "$timescaledb_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || [[ ! "$timescaledb_commit" =~ ^[0-9a-f]{40}$ ]] \
+  || [[ ! "$timescaledb_source_sha" =~ ^[0-9a-f]{64}$ ]] \
+  || [[ ! "$vector_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
   || [[ ! "$vector_commit" =~ ^[0-9a-f]{40}$ ]] \
   || [[ ! "$vector_source_sha" =~ ^[0-9a-f]{64}$ ]] \
   || [[ ! "$build_revision" =~ ^[0-9]+$ ]]; then
-  printf 'invalid version, commit, source digest, or build revision\n' >&2
+  printf 'invalid PostgreSQL, TimescaleDB, pgvector, or build revision value\n' >&2
   exit 2
 fi
 if [[ "$vector_version" != "$default_vector" && "${ALLOW_UNSAFE_TEST_VERSION:-0}" != "1" ]]; then
@@ -65,6 +83,10 @@ build=(docker buildx build "${output[@]}" --pull --file "$dockerfile" --tag "$im
 [[ "${NO_CACHE:-0}" != "1" ]] || build+=(--no-cache)
 [[ -z "$target_platforms" ]] || build+=(--platform "$target_platforms")
 build+=(
+  --build-arg "TIMESCALEDB_TOOLS_IMAGE=${timescaledb_tools_image}"
+  --build-arg "TIMESCALEDB_VERSION=${timescaledb_version}"
+  --build-arg "TIMESCALEDB_COMMIT=${timescaledb_commit}"
+  --build-arg "TIMESCALEDB_SOURCE_SHA256=${timescaledb_source_sha}"
   --build-arg "PGVECTOR_VERSION=${vector_version}"
   --build-arg "PGVECTOR_COMMIT=${vector_commit}"
   --build-arg "PGVECTOR_SOURCE_SHA256=${vector_source_sha}"
@@ -72,7 +94,8 @@ build+=(
   "$root_dir"
 )
 
-printf 'base_image=%s\nimage_tag=%s\npgvector=%s\n' "$base_image" "$image_tag" "$vector_version"
+printf 'base_image=%s\nimage_tag=%s\ntimescaledb=%s\ntimescaledb_tools_image=%s\npgvector=%s\n' \
+  "$base_image" "$image_tag" "$timescaledb_version" "$timescaledb_tools_image" "$vector_version"
 "${build[@]}"
 if [[ "$build_mode" == "load" ]]; then
   architecture="$(docker image inspect "$image_tag" --format '{{.Architecture}}')"

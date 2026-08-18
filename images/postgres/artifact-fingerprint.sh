@@ -17,8 +17,11 @@ docker run "${platform_args[@]}" --rm --entrypoint sh "$image" -c '
       /usr/local/share/postgresql/extension/vector.control \
       /usr/local/share/postgresql/extension/timescaledb.control
     sha256sum /usr/local/share/licenses/pgvector/LICENSE
+    sha256sum \
+      /usr/local/bin/timescaledb-parallel-copy \
+      /usr/local/bin/timescaledb-tune
     find /usr/local/lib/postgresql /usr/local/share/postgresql/extension \
-      -type f \( -name "vector*" -o -path "*/bitcode/vector/*" \) \
+      -type f \( -name "vector*" -o -name "timescaledb*" -o -path "*/bitcode/vector/*" \) \
       -exec sha256sum {} \;
   } | LC_ALL=C sort | sha256sum
 '

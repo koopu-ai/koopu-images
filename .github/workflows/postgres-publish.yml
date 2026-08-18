@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      LOCAL_IMAGE: koopu/postgres:pg18-ts2.29.0-pgv0.8.5-b2
-      PUBLISH_IMAGE: ghcr.io/koopu-ai/postgres:pg18-ts2.29.0-pgv0.8.5-b2
+      LOCAL_IMAGE: koopu/postgres:pg18.6-ts2.29.1-pgv0.8.6-b4
+      PUBLISH_IMAGE: ghcr.io/koopu-ai/postgres:pg18.6-ts2.29.1-pgv0.8.6-b4
       EXPECTED_EXISTING_DIGEST: ${{ inputs.expected_existing_digest }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
